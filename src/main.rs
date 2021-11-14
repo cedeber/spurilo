@@ -2,7 +2,8 @@ use clap::{App, Arg};
 use spurilo::open;
 use std::error::Error;
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("Sprurilo: GPX Tools")
         .version("0.1.0-beta.1")
         .author("Cédric Eberhardt <hello+code@cedeber.fr>")
@@ -16,7 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let path = matches.value_of("INPUT").unwrap();
 
-    open(path)?;
+    open(path).await?;
 
     Ok(())
 }

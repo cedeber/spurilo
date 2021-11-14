@@ -1,11 +1,14 @@
+use chrono::{DateTime, Utc};
 use console::{style, Term};
 use geo::prelude::*;
+use geojson::GeoJson;
 use gpx::{read, Gpx, Track};
+use serde_json::json;
 use std::error::Error;
 use std::fs;
 use std::io::BufReader;
 
-pub fn open(path: &str) -> Result<(), Box<dyn Error>> {
+pub async fn open(path: &str) -> Result<(), Box<dyn Error>> {
     let term = Term::stdout();
     let file = fs::File::open(path).unwrap();
     let reader = BufReader::new(file);
@@ -13,6 +16,8 @@ pub fn open(path: &str) -> Result<(), Box<dyn Error>> {
 
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
+    let mut datetime: Option<DateTime<Utc>> = None;
+    let mut location: Option<String> = None;
     let mut distance = 0.0;
     let mut uphill = 0.0;
     let mut downhill = 0.0;
@@ -40,6 +45,39 @@ pub fn open(path: &str) -> Result<(), Box<dyn Error>> {
         for segment in track.segments.iter() {
             let mut waypoints_iter = segment.points.iter();
             let mut previous_waypoint = waypoints_iter.next().unwrap();
+
+            if datetime.is_none() {
+                datetime = previous_waypoint.time
+            }
+
+            if location.is_none() {
+                if let Ok(req) = reqwest::get(&format!(
+                    "https://photon.komoot.io/reverse?lon={}&lat={}&limit=1&lang=fr",
+                    previous_waypoint.point().lng(),
+                    previous_waypoint.point().lat(),
+                ))
+                .await
+                {
+                    if let Ok(GeoJson::FeatureCollection(ref ctn)) = req.json::<GeoJson>().await {
+                        for feature in &ctn.features {
+                            if let Some(ref props) = feature.properties {
+                                let default = json!("");
+                                let name = props.get("name").unwrap_or(&default);
+                                let street = props.get("street").unwrap_or(&default);
+                                let city = props.get("city").unwrap_or(&default);
+                                let country = props.get("country").unwrap_or(&default);
+
+                                location = Some(
+                                    format!("{}, {}, {}, {}", name, street, city, country)
+                                        .trim()
+                                        .to_string()
+                                        .replace("\"", ""),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
 
             for current_waypoint in waypoints_iter {
                 let geodesic_distance = previous_waypoint
@@ -87,6 +125,21 @@ pub fn open(path: &str) -> Result<(), Box<dyn Error>> {
     ))?;
     if let Some(desc) = description {
         term.write_line(&desc)?;
+    }
+    if let Some(date) = datetime {
+        term.write_line("")?;
+        term.write_line(&format!(
+            "{: <15} {:?}",
+            &style("Date & Time").bold().dim(),
+            date
+        ))?;
+    }
+    if let Some(loc) = location {
+        term.write_line(&format!(
+            "{: <15} {:?}",
+            &style("Location").bold().dim(),
+            loc
+        ))?;
     }
     term.write_line("")?;
     term.write_line(&format!(
