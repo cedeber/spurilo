@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use spurilo::open;
+use spurilo::{open, print};
 use std::error::Error;
 
 #[tokio::main]
@@ -16,8 +16,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     let path = matches.value_of("INPUT").unwrap();
+    let info = open(path).await?;
 
-    open(path).await?;
+    print(&info)?;
 
     Ok(())
 }
