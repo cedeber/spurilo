@@ -1,14 +1,21 @@
 use chrono::{DateTime, Utc};
 use console::{style, Term};
 use geo::prelude::*;
+use geo::simplifyvw::SimplifyVWPreserve;
 use geo::{Coordinate, LineString};
 use geojson::GeoJson;
 use gpx::{read, Gpx, Track};
+use piet_common::kurbo::{Line, Rect};
+use piet_common::{Color, Device, RenderContext};
 use serde_json::json;
 use std::error::Error;
 use std::fs;
 use std::io::BufReader;
 use std::vec::IntoIter;
+
+// 1px = 1meter
+const WIDTH: usize = 4000; // distance
+const HEIGHT: usize = 1000; // uphill & downhill
 
 pub struct GpxInfo {
     name: Option<String>,
@@ -35,6 +42,16 @@ impl GpxInfo {
 }
 
 pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
+    // Graphics
+    let mut device = Device::new().unwrap();
+    let mut bitmap = device.bitmap_target(WIDTH, HEIGHT, 1.0).unwrap();
+    let mut ctx = bitmap.render_context();
+    ctx.fill(
+        Rect::new(0., 0., WIDTH as f64, HEIGHT as f64),
+        &Color::WHITE,
+    );
+
+    // GPX file
     let mut info = GpxInfo::new();
     let file = fs::File::open(path).unwrap();
     let reader = BufReader::new(file);
@@ -120,7 +137,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
                 // TODO probably also take speed into account?
                 //      @see https://docs.rs/geo/0.18.0/geo/#simplification
                 if geodesic_distance > 3.0
-                    || (elevation_diff.is_some() && elevation_diff.unwrap() > 3.0)
+                    || (elevation_diff.is_some() && elevation_diff.unwrap() > 30.0)
                 {
                     // distance
                     info.distance += geodesic_distance;
@@ -133,10 +150,22 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
                         let diff = current_elevation - previous_elevation;
 
                         if diff >= 0. {
-                            info.uphill += diff
+                            info.uphill += diff;
                         } else {
-                            info.downhill -= diff
+                            info.downhill -= diff;
                         }
+
+                        ctx.stroke(
+                            Line::new(
+                                (
+                                    (info.distance - geodesic_distance) / 10.,
+                                    previous_elevation,
+                                ),
+                                (info.distance / 10., current_elevation),
+                            ),
+                            &Color::BLACK,
+                            3.0,
+                        );
                     }
 
                     previous_waypoint = current_waypoint;
@@ -146,7 +175,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     }
 
     let line_string: LineString<f64> = elevation_shape.clone().into();
-    let simplified = line_string.simplify(&1.0);
+    let simplified = line_string.simplifyvw_preserve(&5.0);
 
     let mut simplifier_iter: IntoIter<Coordinate<f64>> = simplified.clone().into_iter();
     let mut simpl_up: f64 = 0.0;
@@ -156,10 +185,19 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     for current_simpl in simplifier_iter {
         let diff = current_simpl.y - previous.y;
         if diff >= 0.0 {
-            simpl_up += diff
+            simpl_up += diff;
         } else {
-            simpl_down -= diff
+            simpl_down -= diff;
         }
+
+        ctx.stroke(
+            Line::new(
+                (previous.x / 10., previous.y),
+                (current_simpl.x / 10., current_simpl.y),
+            ),
+            &Color::BLUE,
+            1.0,
+        );
 
         previous = current_simpl;
     }
@@ -169,6 +207,13 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     println!("{:?}", &info.uphill);
     println!("{:?}", &simpl_up);
     println!("{:?}", &simpl_down);
+
+    ctx.finish().unwrap();
+    std::mem::drop(ctx);
+
+    bitmap
+        .save_to_file("temp-image.png")
+        .expect("file save error");
 
     Ok(info)
 }
