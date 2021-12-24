@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .arg(
             Arg::new("INPUT")
                 .required(true)
-                .about("Sets the input file to use"),
+                .help("Sets the input file to use"),
         )
         .get_matches();
 
