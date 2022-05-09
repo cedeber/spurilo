@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use console::{style, Term};
 use geo::prelude::*;
-use geo::simplifyvw::SimplifyVWPreserve;
 use geo::{Coordinate, LineString};
 use geojson::GeoJson;
 use gpx::{read, Gpx, Track};
@@ -88,8 +87,8 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
             if info.location.is_none() {
                 if let Ok(req) = reqwest::get(&format!(
                     "https://photon.komoot.io/reverse?lon={}&lat={}&limit=1&lang=fr",
-                    previous_waypoint.point().lng(),
-                    previous_waypoint.point().lat(),
+                    previous_waypoint.point().x(),
+                    previous_waypoint.point().y(),
                 ))
                 .await
                 {
@@ -106,7 +105,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
                                     format!("{}, {}, {}, {}", name, street, city, country)
                                         .trim()
                                         .to_string()
-                                        .replace("\"", ""),
+                                        .replace('\"', ""),
                                 );
                             }
                         }
@@ -175,7 +174,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     }
 
     let line_string: LineString<f64> = elevation_shape.clone().into();
-    let simplified = line_string.simplifyvw_preserve(&5.0);
+    let simplified = line_string.simplifyvw(&300.);
 
     let mut simplifier_iter: IntoIter<Coordinate<f64>> = simplified.clone().into_iter();
     let mut simpl_up: f64 = 0.0;
