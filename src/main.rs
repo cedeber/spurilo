@@ -1,10 +1,10 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use spurilo::{open, print};
 use std::error::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("Sprurilo: GPX Tools")
+    let matches = Command::new("Spurilo: GPX Tools")
         .version("0.1.0-beta.1")
         .author("Cédric Eberhardt <hello+code@cedeber.fr>")
         .about("The toolbox for parsing and manipulating .GPX files")
