@@ -213,9 +213,9 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     ctx.finish().unwrap();
     std::mem::drop(ctx);
 
-    bitmap
-        .save_to_file("temp-image.png")
-        .expect("file save error");
+    // bitmap
+    //     .save_to_file("temp-image.png")
+    //     .expect("file save error");
 
     Ok(info)
 }
