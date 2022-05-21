@@ -45,6 +45,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
     let mut device = Device::new().unwrap();
     let mut bitmap = device.bitmap_target(WIDTH, HEIGHT, 1.0).unwrap();
     let mut ctx = bitmap.render_context();
+
     ctx.fill(
         Rect::new(0., 0., WIDTH as f64, HEIGHT as f64),
         &Color::WHITE,
@@ -52,12 +53,14 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
 
     // GPX file
     let mut info = GpxInfo::new();
-    let file = fs::File::open(path).unwrap();
-    let reader = BufReader::new(file);
-    let gpx: Gpx = read(reader).unwrap();
-    let metadata = gpx.metadata;
 
-    if let Some(metadata) = metadata {
+    let gpx: Gpx = {
+        let file = fs::File::open(path).unwrap();
+        let reader = BufReader::new(file);
+        read(reader).unwrap()
+    };
+
+    if let Some(metadata) = gpx.metadata {
         info.name = metadata.name;
         info.description = metadata.description;
     }
@@ -201,8 +204,8 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
         previous = current_simpl;
     }
 
-    println!("{:?}", &elevation_shape);
-    println!("{:?}", &simplified);
+    // println!("{:?}", &elevation_shape);
+    // println!("{:?}", &simplified);
     println!("{:?}", &info.uphill);
     println!("{:?}", &simpl_up);
     println!("{:?}", &simpl_down);
