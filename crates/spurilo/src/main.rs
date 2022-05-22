@@ -1,5 +1,5 @@
 use clap::Parser;
-use spurilo::{open, print};
+use spurilo::{draw, open, parse, print};
 use std::error::Error;
 
 /// The toolbox for parsing and manipulating .GPX files
@@ -9,14 +9,25 @@ struct Args {
     /// GPX file to use
     #[clap()]
     input: String,
+
+    /// Export as image (BETA)
+    #[clap(long)]
+    draw: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let info = open(&args.input).await?;
 
-    print(&info)?;
+    if let Ok(gpx) = open(&args.input).await {
+        if let Ok((info, line)) = parse(&gpx).await {
+            print(&info)?;
+
+            if args.draw {
+                draw(&line, &info).await?;
+            }
+        }
+    }
 
     Ok(())
 }

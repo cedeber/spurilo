@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use console::{style, Term};
 use geo::prelude::*;
+use geo::simplifyvw::SimplifyVWPreserve;
 use geo::{Coordinate, LineString};
 use geojson::GeoJson;
 use gpx::{read, Gpx, Track};
@@ -12,9 +13,9 @@ use std::fs;
 use std::io::BufReader;
 use std::vec::IntoIter;
 
-// 1px = 1meter
-const WIDTH: usize = 4000; // distance
 const HEIGHT: usize = 1000; // uphill & downhill
+const DISTANCE_BASE: f64 = 5.0;
+const DRAW_RATIO: f64 = 3.0;
 
 pub struct GpxInfo {
     name: Option<String>,
@@ -40,40 +41,33 @@ impl GpxInfo {
     }
 }
 
-pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
-    // Graphics
-    let mut device = Device::new().unwrap();
-    let mut bitmap = device.bitmap_target(WIDTH, HEIGHT, 1.0).unwrap();
-    let mut ctx = bitmap.render_context();
-
-    ctx.fill(
-        Rect::new(0., 0., WIDTH as f64, HEIGHT as f64),
-        &Color::WHITE,
-    );
-
-    // GPX file
-    let mut info = GpxInfo::new();
-
+pub async fn open(path: &str) -> Result<Gpx, Box<dyn Error>> {
     let gpx: Gpx = {
-        let file = fs::File::open(path).unwrap();
+        let file = fs::File::open(path)?;
         let reader = BufReader::new(file);
-        read(reader).unwrap()
+        read(reader)?
     };
 
-    if let Some(metadata) = gpx.metadata {
-        info.name = metadata.name;
-        info.description = metadata.description;
-    }
+    Ok(gpx)
+}
 
-    // The name is usually saved on the first track (if not in metadata)
-    let track: &Track = &gpx.tracks[0];
-    //println!("Name 1st track: {:?}", track.name);
-    if info.name.is_none() {
-        info.name = track.name.clone();
-    }
+pub async fn parse(gpx: &Gpx) -> Result<(GpxInfo, LineString<f64>), Box<dyn Error>> {
+    let mut info = GpxInfo::new();
 
-    if info.description.is_none() {
-        info.description = track.description.clone();
+    {
+        let Track {
+            name, description, ..
+        } = &gpx.tracks[0];
+
+        info.name = match &gpx.metadata {
+            Some(metadata) if metadata.name.is_some() => metadata.name.clone(),
+            _ => name.clone(),
+        };
+
+        info.description = match &gpx.metadata {
+            Some(metadata) if metadata.description.is_some() => metadata.description.clone(),
+            _ => description.clone(),
+        };
     }
 
     let mut elevation_shape: Vec<Coordinate<f64>> = Vec::new();
@@ -83,6 +77,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
             let mut waypoints_iter = segment.points.iter();
             let mut previous_waypoint = waypoints_iter.next().unwrap();
 
+            // ! FIXME Probably not a good idea to do these tests for every segment.
             if info.datetime.is_none() {
                 info.datetime = previous_waypoint.time
             }
@@ -120,13 +115,7 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
                 let geodesic_distance = previous_waypoint
                     .point()
                     .geodesic_distance(&current_waypoint.point());
-
-                let mut elevation_diff: Option<f64> = None;
-                if previous_waypoint.elevation.is_some() && current_waypoint.elevation.is_some() {
-                    let previous_elevation = previous_waypoint.elevation.unwrap();
-                    let current_elevation = current_waypoint.elevation.unwrap();
-                    elevation_diff = Some(current_elevation - previous_elevation);
-                }
+                info.distance += geodesic_distance;
 
                 if let Some(elevation) = current_waypoint.elevation {
                     elevation_shape.push(Coordinate {
@@ -134,90 +123,78 @@ pub async fn open(path: &str) -> Result<GpxInfo, Box<dyn Error>> {
                         y: elevation,
                     })
                 }
-
-                // thresholds
-                // TODO probably also take speed into account?
-                //      @see https://docs.rs/geo/0.18.0/geo/#simplification
-                if geodesic_distance > 3.0
-                    || (elevation_diff.is_some() && elevation_diff.unwrap() > 30.0)
-                {
-                    // distance
-                    info.distance += geodesic_distance;
-
-                    // elevation
-                    if previous_waypoint.elevation.is_some() && current_waypoint.elevation.is_some()
-                    {
-                        let previous_elevation = previous_waypoint.elevation.unwrap();
-                        let current_elevation = current_waypoint.elevation.unwrap();
-                        let diff = current_elevation - previous_elevation;
-
-                        if diff >= 0. {
-                            info.uphill += diff;
-                        } else {
-                            info.downhill -= diff;
-                        }
-
-                        ctx.stroke(
-                            Line::new(
-                                (
-                                    (info.distance - geodesic_distance) / 10.,
-                                    previous_elevation,
-                                ),
-                                (info.distance / 10., current_elevation),
-                            ),
-                            &Color::BLACK,
-                            3.0,
-                        );
-                    }
-
-                    previous_waypoint = current_waypoint;
-                }
+                previous_waypoint = current_waypoint;
             }
         }
     }
 
-    let line_string: LineString<f64> = elevation_shape.clone().into();
-    let simplified = line_string.simplifyvw(&300.);
+    // Simplified representation of the elevation, using the Visvalingam-Whyatt algorithm.
+    // This is the triangle area = 0.5 * b * h
+    // Length: 100m?
+    // Uphill: uphill / (distance / 2) * 100
+    // epsilon = 0.5 * length * uphill
+    // ? TODO Dynamic uphill according to the past distance?
+    let epsilon = 0.5 * DISTANCE_BASE * (info.uphill / (info.distance / 2.) * DISTANCE_BASE);
+    let line_string: LineString<f64> = elevation_shape.into();
+    let simplified = line_string.simplifyvw_preserve(&epsilon);
 
     let mut simplifier_iter: IntoIter<Coordinate<f64>> = simplified.clone().into_iter();
-    let mut simpl_up: f64 = 0.0;
-    let mut simpl_down: f64 = 0.0;
     let mut previous = simplifier_iter.next().unwrap();
 
     for current_simpl in simplifier_iter {
         let diff = current_simpl.y - previous.y;
         if diff >= 0.0 {
-            simpl_up += diff;
+            info.uphill += diff;
         } else {
-            simpl_down -= diff;
+            info.downhill -= diff;
         }
 
+        previous = current_simpl;
+    }
+
+    Ok((info, simplified))
+}
+
+pub async fn draw(line: &LineString<f64>, info: &GpxInfo) -> Result<(), Box<dyn Error>> {
+    // Graphics
+    let mut device = Device::new().unwrap();
+    let mut bitmap = device
+        .bitmap_target((info.distance / DRAW_RATIO) as usize, HEIGHT, 1.0)
+        .unwrap();
+    let mut ctx = bitmap.render_context();
+
+    ctx.fill(
+        Rect::new(0., 0., (info.distance / DRAW_RATIO) as f64, HEIGHT as f64),
+        &Color::WHITE,
+    );
+
+    let mut simplifier_iter: IntoIter<Coordinate<f64>> = line.clone().into_iter();
+    let mut previous = simplifier_iter.next().unwrap();
+
+    for current_simpl in simplifier_iter {
         ctx.stroke(
             Line::new(
-                (previous.x / 10., previous.y),
-                (current_simpl.x / 10., current_simpl.y),
+                (previous.x / DRAW_RATIO, HEIGHT as f64 - previous.y),
+                (
+                    current_simpl.x / DRAW_RATIO,
+                    HEIGHT as f64 - current_simpl.y,
+                ),
             ),
-            &Color::BLUE,
+            &Color::FUCHSIA,
             1.0,
         );
 
         previous = current_simpl;
     }
 
-    // println!("{:?}", &elevation_shape);
-    // println!("{:?}", &simplified);
-    println!("{:?}", &info.uphill);
-    println!("{:?}", &simpl_up);
-    println!("{:?}", &simpl_down);
-
     ctx.finish().unwrap();
     std::mem::drop(ctx);
 
-    // bitmap
-    //     .save_to_file("temp-image.png")
-    //     .expect("file save error");
+    bitmap
+        .save_to_file("temp-image.png")
+        .expect("file save error");
 
-    Ok(info)
+    Ok(())
 }
 
 pub fn print(info: &GpxInfo) -> Result<(), Box<dyn Error>> {
