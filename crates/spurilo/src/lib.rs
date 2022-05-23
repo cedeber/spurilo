@@ -77,7 +77,6 @@ pub async fn parse(gpx: &Gpx) -> Result<(GpxInfo, LineString<f64>), Box<dyn Erro
             let mut waypoints_iter = segment.points.iter();
             let mut previous_waypoint = waypoints_iter.next().unwrap();
 
-            // ! FIXME Probably not a good idea to do these tests for every segment.
             if info.datetime.is_none() {
                 info.datetime = previous_waypoint.time
             }
